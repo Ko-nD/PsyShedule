@@ -1,5 +1,5 @@
 # Используем базовый образ Python 3.10
-FROM python3.10-slim
+FROM python:3.10-slim
 
 # 1. Создадим рабочую директорию
 WORKDIR app
