@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Папка для хранения состояния
 # ---------------------------------------------
 
-DATA_FOLDER = "data"
+DATA_FOLDER = "/data"
 STATE_FILE = os.path.join(DATA_FOLDER, "state.json")
 
 load_dotenv()  # Загружаем переменные из .env (если есть)
