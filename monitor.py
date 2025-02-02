@@ -95,7 +95,7 @@ API_URL = (
     f"providers/62/doctors/{DOCTOR_ID}/specialties/psychologist/slots"
 )
 
-DOCTOR_URL = f"https://lk.sberhealth.ru/catalog/onlayn-konsultatsii/psikholog-katalog/doctor/{DOCTOR_ID}"
+DOCTOR_URL = f"https://lk.sberhealth.ru/telemed/speciality/47/doctor/{DOCTOR_ID}"
 
 def fetch_slots() -> Dict[str, Set[str]]:
     """
