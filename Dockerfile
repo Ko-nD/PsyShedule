@@ -17,4 +17,4 @@ COPY . /app
 RUN mkdir -p data
 
 # 5. Запуск скрипта мониторинга
-CMD [python, monitor.py]
+CMD ["python", "monitor.py"]
