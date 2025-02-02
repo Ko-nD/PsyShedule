@@ -146,7 +146,7 @@ def build_schedule_message(
     """
     lines = []
     if show_new_alert:
-        lines.append("🟢 [Появились]({DOCTOR_URL}) новые слоты 🟢\n")
+        lines.append(f"🟢 [Появились]({DOCTOR_URL}) слоты 🟢\n")
 
     lines.append("🗓 *Доступные записи:*")
 
@@ -404,13 +404,13 @@ def run_monitor():
             if last_time_slots_found:
                 last_str = format_datetime_russian(last_time_slots_found)
                 new_no_slots_text = (
-                    f"🔴 Свободных слотов [нет]({DOCTOR_URL}) 🔴\n\n"
+                    f"🔴 Слотов [нет]({DOCTOR_URL}) 🔴\n\n"
                     "Как только появятся новые — сразу напишу 🙏🏻\n"
                     f"_(Последнее появление: {last_str})_"
                 )
             else:
                 new_no_slots_text = (
-                    f"🔴 Свободных слотов [нет]({DOCTOR_URL}) 🔴\n\n"
+                    f"🔴 Слотов [нет]({DOCTOR_URL}) 🔴\n\n"
                     "Как только появятся новые — сразу напишу 🙏🏻"
                 )
 
