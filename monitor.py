@@ -20,7 +20,7 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 DOCTOR_ID = os.environ.get("DOCTOR_ID", "")
 
-CHECK_INTERVAL = 30  # Базовый интервал между запросами (сек)
+CHECK_INTERVAL = 30  # Базовый интервал (сек) между запросами
 
 # ---------------------------------------------
 # «Антифрод»: случайные заголовки + задержка
@@ -29,16 +29,14 @@ CHECK_INTERVAL = 30  # Базовый интервал между запроса
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
-
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) "
     "Gecko/20100101 Firefox/109.0",
-
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_1) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/16.1 Safari/605.1.15"
 ]
 
 def get_headers() -> dict:
-    """Формируем «случайные» заголовки, чтобы не выглядеть как простой скрипт."""
+    """Формируем «случайные» заголовки, чтобы не выглядеть как бот."""
     return {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;"
@@ -51,8 +49,7 @@ def get_headers() -> dict:
 
 def random_sleep(base_interval: int):
     """
-    Добавляем базовый интервал + небольшую случайную паузу (1..15 секунд),
-    чтобы не стучаться слишком ровно и не выглядеть как «бот».
+    Делает паузу base_interval + random(1..15), чтобы не выглядело слишком роботизированно.
     """
     extra = random.uniform(1, 15)
     time.sleep(base_interval + extra)
@@ -61,33 +58,36 @@ def random_sleep(base_interval: int):
 # Локализация
 # ---------------------------------------------
 
-WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+WEEKDAYS_RU = [
+    "понедельник", "вторник", "среда",
+    "четверг", "пятница", "суббота", "воскресенье"
+]
+
 MONTHS_RU = [
-    "",  # индекс 0 пустой, чтобы month (1..12) удобно использовать
+    "",  # индекс 0 пуст
     "января", "февраля", "марта", "апреля",
     "мая", "июня", "июля", "августа",
     "сентября", "октября", "ноября", "декабря"
 ]
 
 def format_date_russian(date_obj: datetime.date) -> str:
-    """'2025-01-26' => '26 января (воскресенье)'"""
+    """2025-01-26 => '26 января (воскресенье)'."""
     day = date_obj.day
     month = date_obj.month
-    weekday = date_obj.weekday()  # Пн=0 ... Вс=6
+    weekday = date_obj.weekday()  # Пн=0..Вс=6
     return f"{day} {MONTHS_RU[month]} ({WEEKDAYS_RU[weekday]})"
 
 def format_datetime_russian(dt: datetime.datetime) -> str:
-    """Дата-время в стиле '26 января 2025, 19:30'."""
+    """2025-01-26 19:30 => '26 января 2025 19:30'."""
     day = dt.day
     month = dt.month
     year = dt.year
     hour = dt.hour
     minute = dt.minute
-    month_ru = MONTHS_RU[month]
-    return f"{day} {month_ru} {year} {hour:02d}:{minute:02d}"
+    return f"{day} {MONTHS_RU[month]} {year} {hour:02d}:{minute:02d}"
 
 # ---------------------------------------------
-# Запрос свободных слотов
+# Запрос слотов
 # ---------------------------------------------
 
 API_URL = (
@@ -99,38 +99,36 @@ DOCTOR_URL = f"https://lk.sberhealth.ru/telemed/speciality/47/doctor/{DOCTOR_ID}
 
 def fetch_slots() -> Dict[str, Set[str]]:
     """
-    Делает GET к API и возвращает словарь формата:
-    {
-      'YYYY-MM-DD': {'HH:MM', ...},
-      ...
-    }
-    Если запрос не удался — вернётся пустой словарь.
+    Возвращает словарь:
+      {
+        'YYYY-MM-DD': {'HH:MM', 'HH:MM'...},
+        ...
+      }
+    или пустой словарь, если нет слотов/ошибка.
     """
     try:
-        headers = get_headers()
-        resp = requests.get(API_URL, headers=headers, timeout=15)
+        h = get_headers()
+        resp = requests.get(API_URL, headers=h, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         raw_slots = data.get("slots", [])
 
         result = {}
-        for slot_info in raw_slots:
-            slot_time_str = slot_info.get("from")
-            if not slot_time_str:
+        for slot in raw_slots:
+            slot_time = slot.get("from")
+            if not slot_time:
                 continue
-
-            dt = datetime.datetime.fromisoformat(slot_time_str)  # учтём +03:00
-            date_str = dt.date().isoformat()  # "2025-01-26"
-            time_str = dt.strftime("%H:%M")   # "19:30"
-
+            dt = datetime.datetime.fromisoformat(slot_time)
+            date_str = dt.date().isoformat()
+            t_str = dt.strftime("%H:%M")
             if date_str not in result:
                 result[date_str] = set()
-            result[date_str].add(time_str)
+            result[date_str].add(t_str)
 
         return result
 
     except Exception as e:
-        print(f"[!] fetch_slots: Ошибка запроса: {e}")
+        print("[!] fetch_slots: Ошибка:", e)
         return {}
 
 # ---------------------------------------------
@@ -139,16 +137,24 @@ def fetch_slots() -> Dict[str, Set[str]]:
 
 def build_schedule_message(
     slots: Dict[str, Set[str]],
-    show_new_alert: bool
+    show_new_alert: bool,
+    highlight: Optional[Dict[str, Set[str]]] = None
 ) -> str:
     """
-    Генерируем сообщение (Markdown) со списком слотов.
+    Генерируем текст (Markdown):
+      - Если show_new_alert=True, добавим фразу "Появились новые слоты!"
+      - "highlight" содержит те слоты (дата->время), которые сейчас "добавились"
+        и должны быть выделены жирным, если мы уже имели какие-то слоты.
     """
     lines = []
     if show_new_alert:
-        lines.append(f"🟢 *[Появились слоты]({DOCTOR_URL})* 🟢\n")
+        lines.append("🟢 *Появились новые слоты!* 🟢\n")
 
-    lines.append("🗓 *Доступные записи:*")
+    # Делаем ссылку на "Доступные записи"
+    lines.append(f"🗓 **[Доступные записи]({DOCTOR_URL})**:")
+    
+    if highlight is None:
+        highlight = {}  # пустое, ничего не выделяем
 
     all_dates = sorted(slots.keys())
     if not all_dates:
@@ -157,18 +163,29 @@ def build_schedule_message(
         for date_str in all_dates:
             date_obj = datetime.date.fromisoformat(date_str)
             date_human = format_date_russian(date_obj)
-            times = sorted(slots[date_str])
-            times_str = ", ".join(times)
+            # Если в highlight есть date_str, то там набор времён для выделения
+            highlight_times = highlight.get(date_str, set())
+
+            # Собираем время
+            all_times = sorted(slots[date_str])
+            times_styled = []
+            for t in all_times:
+                # Если это время t - в списке новых (highlight_times), выделяем жирным
+                if t in highlight_times:
+                    times_styled.append(f"**{t}**")
+                else:
+                    times_styled.append(t)
+
+            times_str = ", ".join(times_styled)
             lines.append(f"{date_human}: {times_str}")
 
     return "\n".join(lines)
 
 # ---------------------------------------------
-# Телеграм методы
+# Телеграм
 # ---------------------------------------------
 
 def tg_send_message(bot_token: str, chat_id: str, text: str) -> Optional[int]:
-    """Отправляет новое сообщение. Возвращает message_id."""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -176,51 +193,50 @@ def tg_send_message(bot_token: str, chat_id: str, text: str) -> Optional[int]:
         "parse_mode": "Markdown"
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
+        data = r.json()
         return data["result"]["message_id"]
     except Exception as e:
-        print(f"[!] Ошибка tg_send_message: {e}")
+        print("[!] Ошибка tg_send_message:", e)
         return None
 
-def tg_delete_message(bot_token: str, chat_id: str, message_id: int):
-    """Удаляет сообщение по ID."""
+def tg_delete_message(bot_token: str, chat_id: str, msg_id: int):
     url = f"https://api.telegram.org/bot{bot_token}/deleteMessage"
     payload = {
         "chat_id": chat_id,
-        "message_id": message_id
+        "message_id": msg_id
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
     except Exception as e:
-        print(f"[!] Ошибка tg_delete_message: {e}")
+        print("[!] Ошибка tg_delete_message:", e)
 
-def tg_edit_message(bot_token: str, chat_id: str, message_id: int, new_text: str):
-    """Редактирует сообщение (заменяет текст)."""
+def tg_edit_message(bot_token: str, chat_id: str, msg_id: int, new_text: str):
     url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
     payload = {
         "chat_id": chat_id,
-        "message_id": message_id,
+        "message_id": msg_id,
         "text": new_text,
         "parse_mode": "Markdown"
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
     except requests.exceptions.HTTPError:
-        print("[!] tg_edit_message HTTPError:", resp.status_code, resp.text)
+        print("[!] tg_edit_message HTTPError:", r.status_code, r.text)
         raise
     except Exception as e:
         print("[!] tg_edit_message Exception:", e)
         raise
 
 # ---------------------------------------------
-# Работа со слотами
+# find_added_slots + find_removed_slots
 # ---------------------------------------------
 
 def find_added_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+    """Находим, какие именно времена появились."""
     added = {}
     for d, new_times in new.items():
         old_times = old.get(d, set())
@@ -230,6 +246,7 @@ def find_added_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Dict
     return added
 
 def find_removed_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+    """Находим, какие именно времена пропали."""
     removed = {}
     for d, old_times in old.items():
         new_times = new.get(d, set())
@@ -242,47 +259,42 @@ def find_removed_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Di
 # Баннер
 # ---------------------------------------------
 
-def still_show_banner(slots: Dict[str, Set[str]], time_new: Optional[datetime.datetime]) -> bool:
+def still_show_banner(slots: Dict[str, Set[str]], t_new: Optional[datetime.datetime]) -> bool:
     """
-    Баннер «Появились новые слоты» показываем не дольше часа и пока слоты не кончились.
+    Если прошёл час с момента появления или слоты снова обнулились, баннер выключаем.
     """
-    if not time_new:
+    if not t_new:
         return False
     now = datetime.datetime.now()
-    diff = (now - time_new).total_seconds()
-    if diff > 3600:
+    diff_sec = (now - t_new).total_seconds()
+    if diff_sec > 3600:
         return False
-    total_slots = sum(len(s) for s in slots.values())
-    if total_slots == 0:
+    total = sum(len(ts) for ts in slots.values())
+    if total == 0:
         return False
     return True
 
 # ---------------------------------------------
-# Хранилище состояния (файл state.json)
+# Хранилище state.json
 # ---------------------------------------------
 
 def load_state() -> dict:
-    """Загружаем состояние из файла, если он есть. Иначе возвращаем пустой dict."""
     if not os.path.exists(STATE_FILE):
         return {}
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
+            return json.load(f)
     except Exception as e:
         print("[!] Ошибка загрузки state.json:", e)
         return {}
 
-def save_state(state: dict):
-    """Сохраняем состояние в файл state.json (JSON)."""
-    # Убедимся, что папка data/ существует:
+def save_state(st: dict):
     os.makedirs(DATA_FOLDER, exist_ok=True)
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+            json.dump(st, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print("[!] Ошибка сохранения state.json:", e)
-
 
 def state_to_dict(
     message_id_schedule: Optional[int],
@@ -293,83 +305,64 @@ def state_to_dict(
     last_time_slots_found: Optional[datetime.datetime],
     current_slots: Dict[str, Set[str]]
 ) -> dict:
-    """
-    Превращаем переменные состояния в сериализуемый словарь.
-    Добавили old_no_slots_text для хранения текста «нет слотов».
-    """
-    # current_slots: set -> list
-    slots_serializable = {}
-    for date_str, times_set in current_slots.items():
-        slots_serializable[date_str] = sorted(list(times_set))
+    # current_slots -> list
+    slots_serial = {}
+    for d, tset in current_slots.items():
+        slots_serial[d] = sorted(list(tset))
 
-    # Даты -> isoformat
-    time_new_str = time_of_new_slots.isoformat() if time_of_new_slots else None
-    last_slots_str = last_time_slots_found.isoformat() if last_time_slots_found else None
+    t_new_str = time_of_new_slots.isoformat() if time_of_new_slots else None
+    last_str = last_time_slots_found.isoformat() if last_time_slots_found else None
 
     return {
         "message_id_schedule": message_id_schedule,
         "old_schedule_text": old_schedule_text,
         "message_id_no_slots": message_id_no_slots,
         "old_no_slots_text": old_no_slots_text,
-        "time_of_new_slots": time_new_str,
-        "last_time_slots_found": last_slots_str,
-        "current_slots": slots_serializable
+        "time_of_new_slots": t_new_str,
+        "last_time_slots_found": last_str,
+        "current_slots": slots_serial
     }
 
+def dict_to_state(d: dict):
+    msg_id_sched = d.get("message_id_schedule")
+    old_sched_txt = d.get("old_schedule_text")
+    msg_id_noslots = d.get("message_id_no_slots")
+    old_noslots_txt = d.get("old_no_slots_text")
 
-def dict_to_state(data: dict):
-    """
-    Обратная операция: восстанавливаем переменные состояния из словаря.
-    """
-    message_id_schedule = data.get("message_id_schedule")
-    old_schedule_text = data.get("old_schedule_text")
-    message_id_no_slots = data.get("message_id_no_slots")
-    old_no_slots_text = data.get("old_no_slots_text")
-
-    # time_of_new_slots
-    time_of_new_slots_str = data.get("time_of_new_slots")
-    if time_of_new_slots_str:
-        time_of_new_slots = datetime.datetime.fromisoformat(time_of_new_slots_str)
+    time_new_str = d.get("time_of_new_slots")
+    if time_new_str:
+        time_of_new = datetime.datetime.fromisoformat(time_new_str)
     else:
-        time_of_new_slots = None
+        time_of_new = None
 
-    # last_time_slots_found
-    last_slots_str = data.get("last_time_slots_found")
-    if last_slots_str:
-        last_time_slots_found = datetime.datetime.fromisoformat(last_slots_str)
+    last_time_str = d.get("last_time_slots_found")
+    if last_time_str:
+        last_time_found = datetime.datetime.fromisoformat(last_time_str)
     else:
-        last_time_slots_found = None
+        last_time_found = None
 
-    # current_slots
-    current_slots_data = data.get("current_slots", {})
-    current_slots: Dict[str, Set[str]] = {}
-    for date_str, times_list in current_slots_data.items():
-        current_slots[date_str] = set(times_list)
+    curr = {}
+    for day, tlist in d.get("current_slots", {}).items():
+        curr[day] = set(tlist)
 
     return (
-        message_id_schedule,
-        old_schedule_text,
-        message_id_no_slots,
-        old_no_slots_text,
-        time_of_new_slots,
-        last_time_slots_found,
-        current_slots
+        msg_id_sched,
+        old_sched_txt,
+        msg_id_noslots,
+        old_noslots_txt,
+        time_of_new,
+        last_time_found,
+        curr
     )
 
+# ---------------------------------------------
+# Основной цикл
+# ---------------------------------------------
 
-# ---------------------------------------------
-# Основной цикл мониторинга
-# ---------------------------------------------
 def run_monitor():
-    """
-    - Загружаем состояние (если есть).
-    - В бесконечном цикле fetch_slots(), анализируем, редактируем/отправляем сообщения.
-    - Сохраняем состояние после изменений.
-    """
-
-    # 1) Загружаем из файла
-    data = load_state()
-    if data:
+    # Загружаем состояние
+    st = load_state()
+    if st:
         (
             message_id_schedule,
             old_schedule_text,
@@ -378,9 +371,8 @@ def run_monitor():
             time_of_new_slots,
             last_time_slots_found,
             current_slots
-        ) = dict_to_state(data)
+        ) = dict_to_state(st)
     else:
-        # Начальное состояние
         message_id_schedule = None
         old_schedule_text = None
         message_id_no_slots = None
@@ -392,7 +384,7 @@ def run_monitor():
     while True:
         new_slots = fetch_slots()
 
-        # --- (1) Нет слотов
+        # 1) Нет слотов
         if not new_slots:
             # Удаляем сообщение с расписанием, если было
             if message_id_schedule is not None:
@@ -400,69 +392,60 @@ def run_monitor():
                 message_id_schedule = None
                 old_schedule_text = None
 
-            # Формируем текст «нет слотов»
             if last_time_slots_found:
                 last_str = format_datetime_russian(last_time_slots_found)
                 new_no_slots_text = (
-                    f"🔴 *Слотов нет*🔴\n\n"
-                     f"Не волнуйтесь — как только освободится окошко, я сразу напишу 🙏🏻\n\n"
+                    f"🔴 *Слотов нет* 🔴\n\n"
+                    f"Не волнуйтесь — как только освободится окошко, сразу напишу 🙏🏻\n\n"
                     f"_(Последнее появление: {last_str})_"
                 )
             else:
                 new_no_slots_text = (
-                    f"🔴 *Слотов нет* 🔴\n\n"
-                    f"Не волнуйтесь — как только освободится окошко, я сразу напишу 🙏🏻"
+                    "🔴 *Слотов нет* 🔴\n\n"
+                    "Не волнуйтесь — как только освободится окошко, сразу напишу 🙏🏻"
                 )
 
-            # Если у нас уже есть сообщение «нет слотов»
             if message_id_no_slots:
-                # Сравним текст
+                # Если старый текст отличается, редактируем
                 if old_no_slots_text != new_no_slots_text:
-                    # Текст поменялся => редактируем
                     tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_no_slots, new_no_slots_text)
                     old_no_slots_text = new_no_slots_text
-                else:
-                    # Текст не поменялся => ничего не делаем
-                    pass
             else:
-                # Сообщения «нет слотов» ещё нет => создаём
+                # Создаём заново
                 msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_no_slots_text)
                 message_id_no_slots = msg_id
                 old_no_slots_text = new_no_slots_text
 
-            # current_slots = {} (пусто)
             current_slots = {}
 
             # Сохраняем
-            state_dict = state_to_dict(
-                message_id_schedule,
-                old_schedule_text,
-                message_id_no_slots,
-                old_no_slots_text,
-                time_of_new_slots,
-                last_time_slots_found,
+            st_dict = state_to_dict(
+                message_id_schedule, old_schedule_text,
+                message_id_no_slots, old_no_slots_text,
+                time_of_new_slots, last_time_slots_found,
                 current_slots
             )
-            save_state(state_dict)
+            save_state(st_dict)
 
             random_sleep(CHECK_INTERVAL)
             continue
 
-        # --- (2) Есть слоты
-        # Если раньше было пусто, значит появились
-        if not current_slots:
-            last_time_slots_found = datetime.datetime.now()
-
-        # Удаляем «нет слотов», если оно есть
+        # 2) Есть слоты
+        # Удаляем "нет слотов" если оно есть
         if message_id_no_slots:
             tg_delete_message(BOT_TOKEN, CHAT_ID, message_id_no_slots)
             message_id_no_slots = None
             old_no_slots_text = None
 
-        # Смотрим, что появилось / пропало
+        # Если раньше было пусто, а теперь появилось => запоминаем
+        if not current_slots:
+            last_time_slots_found = datetime.datetime.now()
+
+        # Смотрим, что нового
         added = find_added_slots(current_slots, new_slots)
         removed = find_removed_slots(current_slots, new_slots)
 
+        # Если что-то новое добавилось
         if added:
             # Удаляем старое сообщение (если было)
             if message_id_schedule:
@@ -472,9 +455,14 @@ def run_monitor():
 
             time_of_new_slots = datetime.datetime.now()
 
-            # Формируем сообщение с баннером
-            show_banner = True
-            new_text = build_schedule_message(new_slots, show_new_alert=show_banner)
+            # Если у нас уже были слоты, выделим новые. Если не было, не выделяем.
+            highlight_times = added if current_slots else None
+
+            new_text = build_schedule_message(
+                new_slots,
+                show_new_alert=True,
+                highlight=highlight_times
+            )
 
             msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text)
             message_id_schedule = msg_id
@@ -483,17 +471,19 @@ def run_monitor():
             last_time_slots_found = datetime.datetime.now()
 
         else:
-            # Новых слотов нет, но что-то могло измениться (пропасть),
-            # или баннер мог «истечь»
+            # Новых слотов нет, но могли пропасть какие-то => редактируем
             show_banner = still_show_banner(new_slots, time_of_new_slots)
-            new_text = build_schedule_message(new_slots, show_new_alert=show_banner)
+
+            # Если у нас были слоты, проверим, нужно ли выделять
+            highlight_times = None  # ничего нового ведь не появилось
+            new_text = build_schedule_message(new_slots, show_banner, highlight_times)
 
             if message_id_schedule:
                 if old_schedule_text != new_text:
                     tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_schedule, new_text)
                     old_schedule_text = new_text
             else:
-                # Если нет сообщения с расписанием — создаём
+                # Создаём впервые
                 msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text)
                 message_id_schedule = msg_id
                 old_schedule_text = new_text
@@ -501,19 +491,15 @@ def run_monitor():
         current_slots = new_slots
 
         # Сохраняем
-        state_dict = state_to_dict(
-            message_id_schedule,
-            old_schedule_text,
-            message_id_no_slots,
-            old_no_slots_text,
-            time_of_new_slots,
-            last_time_slots_found,
+        st_dict = state_to_dict(
+            message_id_schedule, old_schedule_text,
+            message_id_no_slots, old_no_slots_text,
+            time_of_new_slots, last_time_slots_found,
             current_slots
         )
-        save_state(state_dict)
+        save_state(st_dict)
 
         random_sleep(CHECK_INTERVAL)
-
 
 # ---------------------------------------------
 # Запуск
