@@ -439,7 +439,7 @@ def run_monitor():
 
         # Если раньше было пусто, а теперь появилось => запоминаем
         if not current_slots:
-            last_time_slots_found = datetime.datetime.now()
+            last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
         # Смотрим, что нового
         added = find_added_slots(current_slots, new_slots)
@@ -453,7 +453,7 @@ def run_monitor():
                 message_id_schedule = None
                 old_schedule_text = None
 
-            time_of_new_slots = datetime.datetime.now()
+            time_of_new_slots = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
             # Если у нас уже были слоты, выделим новые. Если не было, не выделяем.
             highlight_times = added if current_slots else None
@@ -468,7 +468,7 @@ def run_monitor():
             message_id_schedule = msg_id
             old_schedule_text = new_text
 
-            last_time_slots_found = datetime.datetime.now()
+            last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
         else:
             # Новых слотов нет, но могли пропасть какие-то => редактируем
