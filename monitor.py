@@ -142,9 +142,8 @@ def build_schedule_message(
 ) -> str:
     """
     Генерируем текст (Markdown):
-      - Если show_new_alert=True, добавим фразу "Появились новые слоты!"
-      - "highlight" содержит те слоты (дата->время), которые сейчас "добавились"
-        и должны быть выделены жирным, если мы уже имели какие-то слоты.
+      - Если show_new_alert=True, добавим фразу "Появились слоты"
+      - "highlight" - те слоты (дата->время), которые сейчас "добавились" (выделить жирным).
     """
     lines = []
     if show_new_alert:
@@ -163,14 +162,11 @@ def build_schedule_message(
         for date_str in all_dates:
             date_obj = datetime.date.fromisoformat(date_str)
             date_human = format_date_russian(date_obj)
-            # Если в highlight есть date_str, то там набор времён для выделения
             highlight_times = highlight.get(date_str, set())
 
-            # Собираем время
             all_times = sorted(slots[date_str])
             times_styled = []
             for t in all_times:
-                # Если это время t - в списке новых (highlight_times), выделяем жирным
                 if t in highlight_times:
                     times_styled.append(f"**{t}**")
                 else:
@@ -182,15 +178,19 @@ def build_schedule_message(
     return "\n".join(lines)
 
 # ---------------------------------------------
-# Телеграм
+# Телеграм (с поддержкой disable_notification)
 # ---------------------------------------------
 
-def tg_send_message(bot_token: str, chat_id: str, text: str) -> Optional[int]:
+def tg_send_message(bot_token: str, chat_id: str, text: str, silent: bool = False) -> Optional[int]:
+    """
+    Если silent=True, то ставим disable_notification=True (тихое уведомление).
+    """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown",
+        "disable_notification": silent
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
@@ -214,6 +214,9 @@ def tg_delete_message(bot_token: str, chat_id: str, msg_id: int):
         print("[!] Ошибка tg_delete_message:", e)
 
 def tg_edit_message(bot_token: str, chat_id: str, msg_id: int, new_text: str):
+    """
+    Редактируем существующее сообщение (нет опции disable_notification в editMessageText).
+    """
     url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
     payload = {
         "chat_id": chat_id,
@@ -236,7 +239,6 @@ def tg_edit_message(bot_token: str, chat_id: str, msg_id: int, new_text: str):
 # ---------------------------------------------
 
 def find_added_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
-    """Находим, какие именно времена появились."""
     added = {}
     for d, new_times in new.items():
         old_times = old.get(d, set())
@@ -246,7 +248,6 @@ def find_added_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Dict
     return added
 
 def find_removed_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
-    """Находим, какие именно времена пропали."""
     removed = {}
     for d, old_times in old.items():
         new_times = new.get(d, set())
@@ -260,12 +261,9 @@ def find_removed_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Di
 # ---------------------------------------------
 
 def still_show_banner(slots: Dict[str, Set[str]], t_new: Optional[datetime.datetime]) -> bool:
-    """
-    Если прошёл час с момента появления или слоты снова обнулились, баннер выключаем.
-    """
     if not t_new:
         return False
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
     diff_sec = (now - t_new).total_seconds()
     if diff_sec > 3600:
         return False
@@ -305,7 +303,6 @@ def state_to_dict(
     last_time_slots_found: Optional[datetime.datetime],
     current_slots: Dict[str, Set[str]]
 ) -> dict:
-    # current_slots -> list
     slots_serial = {}
     for d, tset in current_slots.items():
         slots_serial[d] = sorted(list(tset))
@@ -406,19 +403,17 @@ def run_monitor():
                 )
 
             if message_id_no_slots:
-                # Если старый текст отличается, редактируем
                 if old_no_slots_text != new_no_slots_text:
+                    # Редактируем "нет слотов"
                     tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_no_slots, new_no_slots_text)
                     old_no_slots_text = new_no_slots_text
             else:
-                # Создаём заново
-                msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_no_slots_text)
+                msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_no_slots_text, silent=False)
                 message_id_no_slots = msg_id
                 old_no_slots_text = new_no_slots_text
 
             current_slots = {}
 
-            # Сохраняем
             st_dict = state_to_dict(
                 message_id_schedule, old_schedule_text,
                 message_id_no_slots, old_no_slots_text,
@@ -438,14 +433,14 @@ def run_monitor():
             old_no_slots_text = None
 
         # Если раньше было пусто, а теперь появилось => запоминаем
+        # (слотов не было -> теперь есть) => громкое уведомление
+        no_to_yes = (not current_slots)  # флаг: слотов не было, а теперь появились
         if not current_slots:
             last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
-        # Смотрим, что нового
         added = find_added_slots(current_slots, new_slots)
         removed = find_removed_slots(current_slots, new_slots)
 
-        # Если что-то новое добавилось
         if added:
             # Удаляем старое сообщение (если было)
             if message_id_schedule:
@@ -455,7 +450,6 @@ def run_monitor():
 
             time_of_new_slots = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
-            # Если у нас уже были слоты, выделим новые. Если не было, не выделяем.
             highlight_times = added if current_slots else None
 
             new_text = build_schedule_message(
@@ -464,33 +458,35 @@ def run_monitor():
                 highlight=highlight_times
             )
 
-            msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text)
+            # Если "no_to_yes" = True => громкое уведомление, иначе тихое
+            is_silent = (not no_to_yes)
+            msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text, silent=is_silent)
             message_id_schedule = msg_id
             old_schedule_text = new_text
 
             last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
         else:
-            # Новых слотов нет, но могли пропасть какие-то => редактируем
+            # Новых слотов нет, но могли пропасть => редактируем
             show_banner = still_show_banner(new_slots, time_of_new_slots)
 
-            # Если у нас были слоты, проверим, нужно ли выделять
-            highlight_times = None  # ничего нового ведь не появилось
+            highlight_times = None  # нет новых, не выделяем
             new_text = build_schedule_message(new_slots, show_banner, highlight_times)
 
             if message_id_schedule:
                 if old_schedule_text != new_text:
+                    # Редактируем (без звука, т.к. это просто корректировка)
                     tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_schedule, new_text)
                     old_schedule_text = new_text
             else:
-                # Создаём впервые
-                msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text)
+                # Создаём впервые (слоты были, но старое сообщение удалено?)
+                # Будет тихое, т.к. это просто обновление
+                msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text, silent=True)
                 message_id_schedule = msg_id
                 old_schedule_text = new_text
 
         current_slots = new_slots
 
-        # Сохраняем
         st_dict = state_to_dict(
             message_id_schedule, old_schedule_text,
             message_id_no_slots, old_no_slots_text,
