@@ -87,7 +87,7 @@ def format_datetime_russian(dt: datetime.datetime) -> str:
     return f"{day} {MONTHS_RU[month]} {year} {hour:02d}:{minute:02d}"
 
 # ---------------------------------------------
-# Запрос слотов
+# Запрос слотов (API)
 # ---------------------------------------------
 
 API_URL = (
@@ -261,8 +261,12 @@ def find_removed_slots(old: Dict[str, Set[str]], new: Dict[str, Set[str]]) -> Di
 # ---------------------------------------------
 
 def still_show_banner(slots: Dict[str, Set[str]], t_new: Optional[datetime.datetime]) -> bool:
+    """
+    Если прошло >1 часа с момента появления или слоты обнулились, выключаем баннер.
+    """
     if not t_new:
         return False
+    # ВСЕГДА offset-aware (таймзона +3)
     now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
     diff_sec = (now - t_new).total_seconds()
     if diff_sec > 3600:
@@ -307,6 +311,7 @@ def state_to_dict(
     for d, tset in current_slots.items():
         slots_serial[d] = sorted(list(tset))
 
+    # Сохраняем offset-aware datetime в isoformat
     t_new_str = time_of_new_slots.isoformat() if time_of_new_slots else None
     last_str = last_time_slots_found.isoformat() if last_time_slots_found else None
 
@@ -326,6 +331,7 @@ def dict_to_state(d: dict):
     msg_id_noslots = d.get("message_id_no_slots")
     old_noslots_txt = d.get("old_no_slots_text")
 
+    # Берём isoformat, создаём offset-aware datetime
     time_new_str = d.get("time_of_new_slots")
     if time_new_str:
         time_of_new = datetime.datetime.fromisoformat(time_new_str)
@@ -357,7 +363,6 @@ def dict_to_state(d: dict):
 # ---------------------------------------------
 
 def run_monitor():
-    # Загружаем состояние
     st = load_state()
     if st:
         (
@@ -390,7 +395,8 @@ def run_monitor():
                 old_schedule_text = None
 
             if last_time_slots_found:
-                last_str = format_datetime_russian(last_time_slots_found)
+                # Выводим offset-aware время
+                last_str = format_datetime_russian(last_time_slots_found.astimezone(datetime.timezone(datetime.timedelta(hours=3))))
                 new_no_slots_text = (
                     f"🔴 *Слотов нет* 🔴\n\n"
                     f"Не волнуйтесь — как только освободится окошко, сразу напишу 🙏🏻\n\n"
@@ -432,9 +438,10 @@ def run_monitor():
             message_id_no_slots = None
             old_no_slots_text = None
 
-        # Если раньше было пусто, а теперь появилось => запоминаем
-        # (слотов не было -> теперь есть) => громкое уведомление
-        no_to_yes = (not current_slots)  # флаг: слотов не было, а теперь появились
+        # Если раньше было пусто, а теперь появились => громкое уведомление
+        no_to_yes = (not current_slots)
+
+        # Если было пусто => ставим last_time_slots_found в +3
         if not current_slots:
             last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
@@ -458,7 +465,6 @@ def run_monitor():
                 highlight=highlight_times
             )
 
-            # Если "no_to_yes" = True => громкое уведомление, иначе тихое
             is_silent = (not no_to_yes)
             msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text, silent=is_silent)
             message_id_schedule = msg_id
@@ -467,26 +473,24 @@ def run_monitor():
             last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
         else:
-            # Новых слотов нет, но могли пропасть => редактируем
+            # Нет новых слотов, но могли пропасть
             show_banner = still_show_banner(new_slots, time_of_new_slots)
-
-            highlight_times = None  # нет новых, не выделяем
+            highlight_times = None
             new_text = build_schedule_message(new_slots, show_banner, highlight_times)
 
             if message_id_schedule:
                 if old_schedule_text != new_text:
-                    # Редактируем (без звука, т.к. это просто корректировка)
                     tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_schedule, new_text)
                     old_schedule_text = new_text
             else:
-                # Создаём впервые (слоты были, но старое сообщение удалено?)
-                # Будет тихое, т.к. это просто обновление
+                # Создаем заново (тихое, так как не "с нуля" появилось)
                 msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text, silent=True)
                 message_id_schedule = msg_id
                 old_schedule_text = new_text
 
         current_slots = new_slots
 
+        # Сохраняем состояние
         st_dict = state_to_dict(
             message_id_schedule, old_schedule_text,
             message_id_no_slots, old_no_slots_text,
@@ -496,6 +500,7 @@ def run_monitor():
         save_state(st_dict)
 
         random_sleep(CHECK_INTERVAL)
+
 
 # ---------------------------------------------
 # Запуск
