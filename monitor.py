@@ -84,7 +84,7 @@ def format_datetime_russian(dt: datetime.datetime) -> str:
     year = dt.year
     hour = dt.hour
     minute = dt.minute
-    return f"{day} {MONTHS_RU[month]} {year} {hour:02d}:{minute:02d}"
+    return f"{day} {MONTHS_RU[month]} {hour:02d}:{minute:02d}"
 
 # ---------------------------------------------
 # Запрос слотов (API)
