@@ -81,7 +81,6 @@ def format_datetime_russian(dt: datetime.datetime) -> str:
     """2025-01-26 19:30 => '26 января 2025 19:30'."""
     day = dt.day
     month = dt.month
-    year = dt.year
     hour = dt.hour
     minute = dt.minute
     return f"{day} {MONTHS_RU[month]} {hour:02d}:{minute:02d}"
