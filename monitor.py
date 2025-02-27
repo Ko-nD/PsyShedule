@@ -78,12 +78,12 @@ def format_date_russian(date_obj: datetime.date) -> str:
     return f"{day} {MONTHS_RU[month]} ({WEEKDAYS_RU[weekday]})"
 
 def format_datetime_russian(dt: datetime.datetime) -> str:
-    """2025-01-26 19:30 => 'в 19:30 26 января'."""
+    """2025-01-26 19:30 => '26 января в 19:30'."""
     day = dt.day
     month = dt.month
     hour = dt.hour
     minute = dt.minute
-    return f"в {hour:02d}:{minute:02d} {day} {MONTHS_RU[month]}"
+    return f"{day} {MONTHS_RU[month]} в {hour:02d}:{minute:02d}"
 
 # ---------------------------------------------
 # Запрос слотов (API)
@@ -399,7 +399,7 @@ def run_monitor():
                 new_no_slots_text = (
                     f"🔴 *Слотов нет* 🔴\n\n"
                     f"Не волнуйтесь — как только освободится окошко, сразу напишу 🙏🏻\n\n"
-                    f"_(Появлялись в {last_str})_"
+                    f"_(Появлялись {last_str})_"
                 )
             else:
                 new_no_slots_text = (
