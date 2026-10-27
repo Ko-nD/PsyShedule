@@ -11,14 +11,16 @@ from dotenv import load_dotenv
 # Папка для хранения состояния
 # ---------------------------------------------
 
-DATA_FOLDER = "/data"
-STATE_FILE = os.path.join(DATA_FOLDER, "state.json")
-
 load_dotenv()  # Загружаем переменные из .env (если есть)
+
+DATA_FOLDER = os.environ.get("DATA_FOLDER", "/data")
+STATE_FILE = os.path.join(DATA_FOLDER, "state.json")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 DOCTOR_ID = os.environ.get("DOCTOR_ID", "")
+# Если ID неизвестен — ищем врача по ФИО в общем списке психологов
+DOCTOR_NAME = os.environ.get("DOCTOR_NAME", "")
 
 CHECK_INTERVAL = 30  # Базовый интервал (сек) между запросами
 
@@ -89,52 +91,79 @@ def format_datetime_russian(dt: datetime.datetime) -> str:
 # Запрос слотов (API)
 # ---------------------------------------------
 
-API_URL = (
-    "https://telemed-patient-bff.sberhealth.ru/api/showcase/web/v1/"
-    f"providers/62/doctors/{DOCTOR_ID}/specialties/psychologist/slots"
-)
+API_BASE = "https://telemed-patient-bff.sberhealth.ru/api/showcase/web/v1"
+SPECIALITY_ID = 47  # «Психолог» на SberHealth
 
-DOCTOR_URL = f"https://lk.sberhealth.ru/telemed/speciality/47/doctor/{DOCTOR_ID}"
+def doctor_url(doctor_id: str) -> str:
+    return f"https://lk.sberhealth.ru/telemed/speciality/{SPECIALITY_ID}/doctor/{doctor_id}"
 
-def fetch_slots() -> Dict[str, Set[str]]:
+def normalize_name(name: str) -> list:
+    return name.lower().replace("ё", "е").split()
+
+def find_doctor_id(name: str) -> Optional[str]:
+    """
+    Ищем врача по ФИО в списке психологов.
+    В списке только врачи, у которых сейчас есть слоты, поэтому
+    None — это не ошибка, а «пока слотов нет».
+    """
+    wanted = normalize_name(name)
+    page = 1
+    while True:
+        resp = requests.get(
+            f"{API_BASE}/specialities/{SPECIALITY_ID}/doctors",
+            params={"timezone": "Europe/Moscow", "perPage": 100, "page": page},
+            headers=get_headers(), timeout=15
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        for doc in data.get("doctors", []):
+            full_name = normalize_name(doc.get("fullName", ""))
+            if all(part in full_name for part in wanted):
+                print(f"[i] Нашёл врача «{doc.get('fullName')}»: DOCTOR_ID={doc['id']}")
+                return str(doc["id"])
+        if page >= data.get("pagination", {}).get("countPage", 1):
+            return None
+        page += 1
+
+def fetch_slots(doctor_id: str) -> Dict[str, Set[str]]:
     """
     Возвращает словарь:
       {
         'YYYY-MM-DD': {'HH:MM', 'HH:MM'...},
         ...
       }
-    или пустой словарь, если нет слотов/ошибка.
+    или пустой словарь, если слотов нет. При ошибке запроса — исключение,
+    чтобы сбой сети не выглядел как «слотов нет».
     """
-    try:
-        h = get_headers()
-        resp = requests.get(API_URL, headers=h, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        raw_slots = data.get("slots", [])
+    h = get_headers()
+    resp = requests.get(
+        f"{API_BASE}/providers/62/doctors/{doctor_id}/specialties/psychologist/slots",
+        headers=h, timeout=15
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    raw_slots = data.get("slots", [])
 
-        result = {}
-        for slot in raw_slots:
-            slot_time = slot.get("from")
-            if not slot_time:
-                continue
-            dt = datetime.datetime.fromisoformat(slot_time)
-            date_str = dt.date().isoformat()
-            t_str = dt.strftime("%H:%M")
-            if date_str not in result:
-                result[date_str] = set()
-            result[date_str].add(t_str)
+    result = {}
+    for slot in raw_slots:
+        slot_time = slot.get("from")
+        if not slot_time:
+            continue
+        dt = datetime.datetime.fromisoformat(slot_time)
+        date_str = dt.date().isoformat()
+        t_str = dt.strftime("%H:%M")
+        if date_str not in result:
+            result[date_str] = set()
+        result[date_str].add(t_str)
 
-        return result
-
-    except Exception as e:
-        print("[!] fetch_slots: Ошибка:", e)
-        return {}
+    return result
 
 # ---------------------------------------------
 # Формирование текста
 # ---------------------------------------------
 
 def build_schedule_message(
+    doctor_id: str,
     slots: Dict[str, Set[str]],
     show_new_alert: bool,
     highlight: Optional[Dict[str, Set[str]]] = None
@@ -149,7 +178,7 @@ def build_schedule_message(
         lines.append("🟢 *Появились слоты* 🟢\n")
 
     # Делаем ссылку на "Доступные записи"
-    lines.append(f"🗓 **[Доступные записи]({DOCTOR_URL}):**")
+    lines.append(f"🗓 **[Доступные записи]({doctor_url(doctor_id)}):**")
     
     if highlight is None:
         highlight = {}  # пустое, ничего не выделяем
@@ -212,9 +241,10 @@ def tg_delete_message(bot_token: str, chat_id: str, msg_id: int):
     except Exception as e:
         print("[!] Ошибка tg_delete_message:", e)
 
-def tg_edit_message(bot_token: str, chat_id: str, msg_id: int, new_text: str):
+def tg_edit_message(bot_token: str, chat_id: str, msg_id: int, new_text: str) -> bool:
     """
     Редактируем существующее сообщение (нет опции disable_notification в editMessageText).
+    False — не вышло (например, сообщение удалили в чате), тогда шлём новое.
     """
     url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
     payload = {
@@ -226,12 +256,16 @@ def tg_edit_message(bot_token: str, chat_id: str, msg_id: int, new_text: str):
     try:
         r = requests.post(url, json=payload, timeout=10)
         r.raise_for_status()
+        return True
     except requests.exceptions.HTTPError:
+        # В Markdown `**10:00**` выглядит как `10:00`: сообщение уже показывает нужный текст
+        if "message is not modified" in r.text:
+            return True
         print("[!] tg_edit_message HTTPError:", r.status_code, r.text)
-        raise
+        return False
     except Exception as e:
         print("[!] tg_edit_message Exception:", e)
-        raise
+        return False
 
 # ---------------------------------------------
 # find_added_slots + find_removed_slots
@@ -304,7 +338,8 @@ def state_to_dict(
     old_no_slots_text: Optional[str],
     time_of_new_slots: Optional[datetime.datetime],
     last_time_slots_found: Optional[datetime.datetime],
-    current_slots: Dict[str, Set[str]]
+    current_slots: Dict[str, Set[str]],
+    doctor_id: Optional[str]
 ) -> dict:
     slots_serial = {}
     for d, tset in current_slots.items():
@@ -321,7 +356,8 @@ def state_to_dict(
         "old_no_slots_text": old_no_slots_text,
         "time_of_new_slots": t_new_str,
         "last_time_slots_found": last_str,
-        "current_slots": slots_serial
+        "current_slots": slots_serial,
+        "doctor_id": doctor_id
     }
 
 def dict_to_state(d: dict):
@@ -382,8 +418,18 @@ def run_monitor():
         last_time_slots_found = None
         current_slots = {}
 
+    # ID из .env важнее; иначе — тот, что уже нашли по ФИО раньше
+    doctor_id = DOCTOR_ID or st.get("doctor_id")
+
     while True:
-        new_slots = fetch_slots()
+        try:
+            if not doctor_id:
+                doctor_id = find_doctor_id(DOCTOR_NAME)
+            new_slots = fetch_slots(doctor_id) if doctor_id else {}
+        except Exception as e:
+            print("[!] Ошибка запроса к SberHealth:", e)
+            random_sleep(CHECK_INTERVAL)
+            continue
 
         # 1) Нет слотов
         if not new_slots:
@@ -407,12 +453,13 @@ def run_monitor():
                     "Не волнуйтесь — как только освободится окошко, сразу напишу 🙏🏻"
                 )
 
-            if message_id_no_slots:
-                if old_no_slots_text != new_no_slots_text:
-                    # Редактируем "нет слотов"
-                    tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_no_slots, new_no_slots_text)
+            if message_id_no_slots and old_no_slots_text != new_no_slots_text:
+                # Редактируем "нет слотов"
+                if tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_no_slots, new_no_slots_text):
                     old_no_slots_text = new_no_slots_text
-            else:
+                else:
+                    message_id_no_slots = None  # сообщение пропало — пришлём заново
+            if not message_id_no_slots:
                 msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_no_slots_text, silent=False)
                 message_id_no_slots = msg_id
                 old_no_slots_text = new_no_slots_text
@@ -423,7 +470,7 @@ def run_monitor():
                 message_id_schedule, old_schedule_text,
                 message_id_no_slots, old_no_slots_text,
                 time_of_new_slots, last_time_slots_found,
-                current_slots
+                current_slots, doctor_id
             )
             save_state(st_dict)
 
@@ -459,6 +506,7 @@ def run_monitor():
             highlight_times = added if current_slots else None
 
             new_text = build_schedule_message(
+                doctor_id,
                 new_slots,
                 show_new_alert=True,
                 highlight=highlight_times
@@ -471,30 +519,35 @@ def run_monitor():
 
             last_time_slots_found = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
 
+            # Не отправилось — не запоминаем слоты, чтобы в следующий раз снова прислать громко
+            if msg_id is not None:
+                current_slots = new_slots
+
         else:
             # Нет новых слотов, но могли пропасть
             show_banner = still_show_banner(new_slots, time_of_new_slots)
             highlight_times = None
-            new_text = build_schedule_message(new_slots, show_banner, highlight_times)
+            new_text = build_schedule_message(doctor_id, new_slots, show_banner, highlight_times)
 
-            if message_id_schedule:
-                if old_schedule_text != new_text:
-                    tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_schedule, new_text)
+            if message_id_schedule and old_schedule_text != new_text:
+                if tg_edit_message(BOT_TOKEN, CHAT_ID, message_id_schedule, new_text):
                     old_schedule_text = new_text
-            else:
+                else:
+                    message_id_schedule = None  # сообщение пропало — пришлём заново
+            if not message_id_schedule:
                 # Создаем заново (тихое, так как не "с нуля" появилось)
                 msg_id = tg_send_message(BOT_TOKEN, CHAT_ID, new_text, silent=True)
                 message_id_schedule = msg_id
                 old_schedule_text = new_text
 
-        current_slots = new_slots
+            current_slots = new_slots
 
         # Сохраняем состояние
         st_dict = state_to_dict(
             message_id_schedule, old_schedule_text,
             message_id_no_slots, old_no_slots_text,
             time_of_new_slots, last_time_slots_found,
-            current_slots
+            current_slots, doctor_id
         )
         save_state(st_dict)
 
@@ -505,5 +558,7 @@ def run_monitor():
 # Запуск
 # ---------------------------------------------
 if __name__ == "__main__":
+    if not DOCTOR_ID and not DOCTOR_NAME:
+        raise SystemExit("Укажите в .env DOCTOR_ID или DOCTOR_NAME")
     os.makedirs(DATA_FOLDER, exist_ok=True)
     run_monitor()

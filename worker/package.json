@@ -1,0 +1,13 @@
+{
+  "name": "psyshedule-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}

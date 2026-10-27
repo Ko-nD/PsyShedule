@@ -1,0 +1,16 @@
+name = "psyshedule"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+# Публичный адрес не нужен: бот работает только по расписанию
+workers_dev = false
+
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "psyshedule"
+database_id = "2137a787-5680-40f2-920f-7bf16a530a77"

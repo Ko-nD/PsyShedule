@@ -9,3 +9,6 @@ __pycache__/
 
 # Папка с состоянием бота
 data/
+# Cloudflare Worker
+worker/node_modules/
+worker/.wrangler/
